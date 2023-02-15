@@ -1,5 +1,6 @@
+#!/bin/bash
 command=$1
-export SOUCE_CODE_DIR='/home/nn/binutils-gdb/binutils'
+export SOURCE_CODE_DIR='/home/nn/binutils-gdb/binutils'
 export MY_AFL_TOOL_PATH='/home/nn/AFL-Modify'
 export BASE_WORK_DIR='/home/nn/work/testing'
 export ROUND='BOLT'
@@ -18,14 +19,14 @@ export CXXFLAGS='-fprofile-instr-generate -fcoverage-mapping'
 export LDFLAGS='-Wl,--emit-relocs'
 
 compile(){
-    cd $SOUCE_CODE_DIR
+    cd $SOURCE_CODE_DIR
     ./configure --disable-shared 
     make -j12
     cp ./$1 $OUTPUT_BINARY_PATH/$1.ORIGINAL
 }
 
 fuzz(){
-    export LLVM_PROFILE_FILE='$LLVM_PROFILE_DIR/$ROUND.profraw'
+    export LLVM_PROFILE_FILE=$LLVM_PROFILE_DIR/$ROUND.profraw
     $MY_AFL_TOOL_PATH/afl-fuzz -m none -i $MY_AFL_SEEDS_IN -o $MY_AFL_OUTPUT_PATH -s 123 -D -M master -- $OUTPUT_BINARY_PATH/$1 $2 @@
 }
 
@@ -33,12 +34,12 @@ perf_record(){
     outputfiledir=$PERF_RECORD_DIR
     seeddir=$MY_AFL_OUTPUT_PATH/master/queue
 
-    _fifofile="$$.fifo"
+    _fifofile="perf.fifo"
     mkfifo $_fifofile     # 创建一个FIFO类型的文件
     exec 6<>$_fifofile    # 将文件描述符6写入 FIFO 管道， 这里6也可以是其它数字
     rm $_fifofile         # 删也可以，
 
-    degree=14  # 定义并行度
+    degree=$(nproc)  # 定义并行度
 
     #根据并行度设置信号个数
     #事实上是在fd6中放置了$degree个回车符
@@ -54,7 +55,6 @@ perf_record(){
         {
             cur_timestamp=$(date +%s%N)
             perf record -e cycles:u -j any,u -o $outputfiledir/$cur_timestamp.data -- $OUTPUT_BINARY_PATH/$1 $2 $i &
-            sleep 3
             echo >&6 # 当进程结束以后，再向管道追加一个信号，保持管道中的信号总数量
         } &
     done
@@ -64,15 +64,15 @@ perf_record(){
     exec 6>&- # 关闭管道
 }
 
-perf2bolt(){
+perf_to_bolt(){
     bin=$1
 
-    _fifofile="$$.fifo"
+    _fifofile="afl.fifo"
     mkfifo $_fifofile     # 创建一个FIFO类型的文件
     exec 6<>$_fifofile    # 将文件描述符6写入 FIFO 管道， 这里6也可以是其它数字
-    rm $_fifofile         # 删也可以，
+    
 
-    degree=1  # 定义并行度
+    degree=$(nproc)  # 定义并行度
 
     #根据并行度设置信号个数
     #事实上是在fd6中放置了$degree个回车符
@@ -89,39 +89,47 @@ perf2bolt(){
             cur_timestamp=$(date +%s%N)
             echo "perf2bolt -p $i -o $BOLT_FORMAT_DATA_DIR/$cur_timestamp.fdata $OUTPUT_BINARY_PATH/$bin"
             perf2bolt -p $i -o $BOLT_FORMAT_DATA_DIR/$cur_timestamp.fdata $OUTPUT_BINARY_PATH/$bin
-            sleep 3
             echo >&6 # 当进程结束以后，再向管道追加一个信号，保持管道中的信号总数量
         } &
     done
 
     wait # 等待所有任务结束
     exec 6>&- # 关闭管道
+    rm $_fifofile         # 删也可
 }
 
 merge(){
     # merge bolt format
-    merge-fdata objdump/combined-data/* > combined.data
+    merge-fdata $BOLT_FORMAT_DATA_DIR/* > $BASE_WORK_DIR/combined.data
 
     # change the binary
-    llvm-bolt /home/nn/binutils-gdb/binutils/objdump -o /home/nn/binutils-gdb/binutils/objdump.bolt -data=all.data  -reorder-blocks=ext-tsp -reorder-functions=hfsort -split-functions -split-all-cold -split-eh -dyno-stats
+    llvm-bolt $OUTPUT_BINARY_PATH/$1 -o $OUTPUT_BINARY_PATH/$2 -data=$BASE_WORK_DIR/combined.data  -reorder-blocks=ext-tsp -reorder-functions=hfsort -split-functions -split-all-cold -split-eh -dyno-stats
 }
 
 case $command in
   (compile)
   compile objdump
      ;;
+
   (fuzz)
   fuzz objdump.ORIGINAL '-d'
      ;;
+
   (perf_record)
   perf_record objdump.ORIGINAL '-d'
         ;;
+
   (perf2bolt)
-  perf2bolt objdump.ORIGINAL
+  perf_to_bolt objdump.ORIGINAL
     ;;
+
+  (merge)
+  merge objdump.ORIGINAL objdump.BOLT
+    ;;
+    
   (*)
     echo "Please check: "
-    echo "1. source code directory is $SOUCE_CODE_DIR"
+    echo "1. source code directory is $SOURCE_CODE_DIR"
     echo "2. afl tool chain path is $MY_AFL_TOOL_PATH"
     echo "3. base working directory is $BASE_WORK_DIR"
     echo ""
