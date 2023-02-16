@@ -3,7 +3,28 @@ command=$1
 export SOURCE_CODE_DIR='/home/nn/binutils-gdb/binutils'
 export MY_AFL_TOOL_PATH='/home/nn/AFL-Modify'
 export BASE_WORK_DIR='/home/nn/work/testing'
-export ROUND='BOLT'
+if [ $ROUND ];then
+	echo ""
+else
+	read -r -p "Please choose ROUND name: 1. ORIGINAL 2. BOLT" input
+    
+        case $input in
+        [1])
+            export ROUND="ORIGINAL"
+            ;;
+        [2])
+            export ROUND="BOLT"
+            ;;
+        *)
+        echo "Invalid input..."
+        exit 1
+        ;;
+    esac
+fi
+echo "================Running in "$ROUND" mode====================="
+sleep 3
+export FUZZING_BIN='objdump'
+export FUZZING_ARGS='-d'
 
 export OUTPUT_BINARY_PATH=$BASE_WORK_DIR/bin
 export LLVM_PROFILE_DIR=$BASE_WORK_DIR/prof
@@ -27,12 +48,12 @@ compile(){
 
 fuzz(){
     export LLVM_PROFILE_FILE=$LLVM_PROFILE_DIR/$ROUND.profraw
-    $MY_AFL_TOOL_PATH/afl-fuzz -m none -i $MY_AFL_SEEDS_IN -o $MY_AFL_OUTPUT_PATH -s 123 -D -M master -- $OUTPUT_BINARY_PATH/$1 $2 @@
+    $MY_AFL_TOOL_PATH/afl-fuzz -m none -i $MY_AFL_SEEDS_IN -o $MY_AFL_OUTPUT_PATH.$ROUND -s 123 -D -M master -- $OUTPUT_BINARY_PATH/$1.$ROUND $2 @@
 }
 
 perf_record(){
     outputfiledir=$PERF_RECORD_DIR
-    seeddir=$MY_AFL_OUTPUT_PATH/master/queue
+    seeddir=$MY_AFL_OUTPUT_PATH.$ROUND/master/queue
 
     _fifofile="perf.fifo"
     mkfifo $_fifofile     # 创建一个FIFO类型的文件
@@ -54,7 +75,8 @@ perf_record(){
         read -u6
         {
             cur_timestamp=$(date +%s%N)
-            perf record -e cycles:u -j any,u -o $outputfiledir/$cur_timestamp.data -- $OUTPUT_BINARY_PATH/$1 $2 $i &
+            # echo "perf record -e cycles:u -j any,u -o $outputfiledir/$cur_timestamp.data -- $OUTPUT_BINARY_PATH/$1.$ROUND $2 $i"
+            perf record -e cycles:u -j any,u -o $outputfiledir/$cur_timestamp.data -- $OUTPUT_BINARY_PATH/$1.$ROUND $2 $i
             echo >&6 # 当进程结束以后，再向管道追加一个信号，保持管道中的信号总数量
         } &
     done
@@ -65,7 +87,7 @@ perf_record(){
 }
 
 perf_to_bolt(){
-    bin=$1
+    bin=$1.$ROUND
 
     _fifofile="afl.fifo"
     mkfifo $_fifofile     # 创建一个FIFO类型的文件
@@ -100,31 +122,33 @@ perf_to_bolt(){
 
 merge(){
     # merge bolt format
-    merge-fdata $BOLT_FORMAT_DATA_DIR/* > $BASE_WORK_DIR/combined.data
+    rm $BASE_WORK_DIR/combined.data
+    find . -name "*.fdata" -print0 | xargs -0 merge-fdata -o $BASE_WORK_DIR/combined.data
+    # merge-fdata $BOLT_FORMAT_DATA_DIR/* > $BASE_WORK_DIR/combined.data
 
     # change the binary
-    llvm-bolt $OUTPUT_BINARY_PATH/$1 -o $OUTPUT_BINARY_PATH/$2 -data=$BASE_WORK_DIR/combined.data  -reorder-blocks=ext-tsp -reorder-functions=hfsort -split-functions -split-all-cold -split-eh -dyno-stats
+    llvm-bolt $OUTPUT_BINARY_PATH/$1.$ROUND -o $OUTPUT_BINARY_PATH/$2 -data=$BASE_WORK_DIR/combined.data  -reorder-blocks=ext-tsp -reorder-functions=hfsort -split-functions -split-all-cold -split-eh -dyno-stats
 }
 
 case $command in
   (compile)
-  compile objdump
+  compile $FUZZING_BIN
      ;;
 
   (fuzz)
-  fuzz objdump.ORIGINAL '-d'
+  fuzz $FUZZING_BIN $FUZZING_ARGS
      ;;
 
   (perf_record)
-  perf_record objdump.ORIGINAL '-d'
-        ;;
+  perf_record $FUZZING_BIN $FUZZING_ARGS
+     ;;
 
   (perf2bolt)
-  perf_to_bolt objdump.ORIGINAL
+  perf_to_bolt $FUZZING_BIN
     ;;
 
   (merge)
-  merge objdump.ORIGINAL objdump.BOLT
+  merge $FUZZING_BIN $FUZZING_BIN.BOLT
     ;;
     
   (*)
