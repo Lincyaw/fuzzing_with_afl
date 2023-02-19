@@ -1,8 +1,8 @@
 #!/bin/bash
 command=$1
-export SOURCE_CODE_DIR='/home/nn/binutils-gdb/binutils'
+export SOURCE_CODE_DIR='/home/nn/jq-jq-1.5'
 export MY_AFL_TOOL_PATH='/home/nn/AFL-Modify'
-export BASE_WORK_DIR='/home/nn/work/testing'
+export BASE_WORK_DIR='/home/nn/work/jq-plus'
 if [ $ROUND ];then
 	echo ""
 else
@@ -22,16 +22,17 @@ else
     esac
 fi
 echo "================Running in "$ROUND" mode====================="
-sleep 3
-export FUZZING_BIN='objdump'
-export FUZZING_ARGS='-d'
+export FUZZING_BIN='jq'
+export FUZZING_ARGS=". "
 
 export OUTPUT_BINARY_PATH=$BASE_WORK_DIR/bin
 export LLVM_PROFILE_DIR=$BASE_WORK_DIR/prof
-export MY_AFL_SEEDS_IN=$BASE_WORK_DIR/afl_in_seeds
+# export MY_AFL_SEEDS_IN=$BASE_WORK_DIR/afl_in_seeds
+export MY_AFL_SEEDS_IN='/home/nn/work/jq/seeds'
 export MY_AFL_OUTPUT_PATH=$BASE_WORK_DIR/afl_out
 export PERF_RECORD_DIR=$BASE_WORK_DIR/perf_data
 export BOLT_FORMAT_DATA_DIR=$BASE_WORK_DIR/bolt_format_prof
+export AFL_LLVM_DOCUMENT_IDS=$BASE_WORK_DIR/afl_ids
 
 export CC=$MY_AFL_TOOL_PATH/afl-clang-lto 
 export CXX=$MY_AFL_TOOL_PATH/afl-clang-lto++  
@@ -39,16 +40,41 @@ export CFLAGS='-fprofile-instr-generate -fcoverage-mapping'
 export CXXFLAGS='-fprofile-instr-generate -fcoverage-mapping' 
 export LDFLAGS='-Wl,--emit-relocs'
 
+
 compile(){
     cd $SOURCE_CODE_DIR
+    if [ -f "$BASE_WORK_DIR/denylist.txt" ]; then
+        export AFL_LLVM_DENYLIST=$BASE_WORK_DIR/denylist.txt
+        echo "yes"
+    fi
     ./configure --disable-shared 
+    make clean
     make -j12
     cp ./$1 $OUTPUT_BINARY_PATH/$1.ORIGINAL
 }
 
 fuzz(){
     export LLVM_PROFILE_FILE=$LLVM_PROFILE_DIR/$ROUND.profraw
-    $MY_AFL_TOOL_PATH/afl-fuzz -m none -i $MY_AFL_SEEDS_IN -o $MY_AFL_OUTPUT_PATH.$ROUND -s 123 -D -M master -- $OUTPUT_BINARY_PATH/$1.$ROUND $2 @@
+    echo "$MY_AFL_TOOL_PATH/afl-fuzz -m none -i $MY_AFL_SEEDS_IN -o $MY_AFL_OUTPUT_PATH.$ROUND -s 123 -D -M master -- $OUTPUT_BINARY_PATH/$1.$ROUND $2"
+    $MY_AFL_TOOL_PATH/afl-fuzz -m none -i $MY_AFL_SEEDS_IN -o $MY_AFL_OUTPUT_PATH.$ROUND -s 123 -D -M master -- $OUTPUT_BINARY_PATH/$1.$ROUND $2
+}
+
+prefuzz(){
+    export LLVM_PROFILE_FILE=$LLVM_PROFILE_DIR/$ROUND.profraw
+    export AFL_DEBUG=1
+    echo "$MY_AFL_TOOL_PATH/afl-fuzz -m none -i $MY_AFL_SEEDS_IN -o $MY_AFL_OUTPUT_PATH.$ROUND -s 123 -D -M master -- $OUTPUT_BINARY_PATH/$1.$ROUND $2"
+    $MY_AFL_TOOL_PATH/afl-fuzz -m none -i $MY_AFL_SEEDS_IN -o $MY_AFL_OUTPUT_PATH.$ROUND -s 123 -D -M master -- $OUTPUT_BINARY_PATH/$1.$ROUND $2
+}
+
+pro_deny_list(){
+    for i in `grep var_bytes $BASE_WORK_DIR/afl_out.$ROUND/master/fuzzer_stats | sed 's/^.*://'`; do
+        echo fuck
+        egrep "edgeID=$i\$" $BASE_WORK_DIR/afl_ids
+    done | awk '{print$2}' | sed 's/Function=/fun: /' | sort -u > $BASE_WORK_DIR/denylist.txt
+
+    # edges=$(cat $BASE_WORK_DIR/afl_out.$ROUND/master/fuzzer_stats| grep var_bytes | awk '{ s = ""; for (i = 3; i <= NF; i++) s = s $i " "; print s }' )
+    # lines="="$(eval echo $edges | sed 's/[ ][ ]*/|=/g')
+    # grep -E "$lines" $BASE_WORK_DIR/afl_ids | awk '{print $2}' | uniq -u | sed 's/Function=/fun: /g' > $BASE_WORK_DIR/denylist.txt
 }
 
 perf_record(){
@@ -75,14 +101,12 @@ perf_record(){
         read -u6
         {
             cur_timestamp=$(date +%s%N)
-            # echo "perf record -e cycles:u -j any,u -o $outputfiledir/$cur_timestamp.data -- $OUTPUT_BINARY_PATH/$1.$ROUND $2 $i"
+            echo "perf record -e cycles:u -j any,u -o $outputfiledir/$cur_timestamp.data -- $OUTPUT_BINARY_PATH/$1.$ROUND $2 $i"
             perf record -e cycles:u -j any,u -o $outputfiledir/$cur_timestamp.data -- $OUTPUT_BINARY_PATH/$1.$ROUND $2 $i
             echo >&6 # 当进程结束以后，再向管道追加一个信号，保持管道中的信号总数量
         } &
     done
-
     wait # 等待所有任务结束
-
     exec 6>&- # 关闭管道
 }
 
@@ -130,29 +154,17 @@ merge(){
     llvm-bolt $OUTPUT_BINARY_PATH/$1.$ROUND -o $OUTPUT_BINARY_PATH/$2 -data=$BASE_WORK_DIR/combined.data  -reorder-blocks=ext-tsp -reorder-functions=hfsort -split-functions -split-all-cold -split-eh -dyno-stats
 }
 
-case $command in
-  (compile)
-  compile $FUZZING_BIN
-     ;;
-
-  (fuzz)
-  fuzz $FUZZING_BIN $FUZZING_ARGS
-     ;;
-
-  (perf_record)
-  perf_record $FUZZING_BIN $FUZZING_ARGS
-     ;;
-
-  (perf2bolt)
-  perf_to_bolt $FUZZING_BIN
-    ;;
-
-  (merge)
-  merge $FUZZING_BIN $FUZZING_BIN.BOLT
-    ;;
-    
-  (*)
-    echo "Please check: "
+read -r -p "Please choose ROUND name: 
+1. reset 
+2. compile 
+3. fuzz to produce denylist 
+4. produce denylist
+5. normal fuzz
+6. transform data and optimize with bolt
+" input
+case $input in
+[1])
+        echo "Please check: "
     echo "1. source code directory is $SOURCE_CODE_DIR"
     echo "2. afl tool chain path is $MY_AFL_TOOL_PATH"
     echo "3. base working directory is $BASE_WORK_DIR"
@@ -192,9 +204,6 @@ case $command in
     if [ ! -d $MY_AFL_SEEDS_IN ]; then 
         mkdir $MY_AFL_SEEDS_IN
     fi
-    if [ ! -d $MY_AFL_OUTPUT_PATH ]; then 
-        mkdir $MY_AFL_OUTPUT_PATH
-    fi
     if [ ! -d $PERF_RECORD_DIR ]; then 
         mkdir $PERF_RECORD_DIR
     fi
@@ -202,4 +211,25 @@ case $command in
         mkdir $BOLT_FORMAT_DATA_DIR
     fi
     ;;
+[2])
+    compile $FUZZING_BIN
+    ;;
+[3])
+    prefuzz $FUZZING_BIN "$FUZZING_ARGS"
+    ;;
+[4])
+    pro_deny_list
+    ;;
+[5])
+    fuzz $FUZZING_BIN "$FUZZING_ARGS"
+    ;;
+[6])
+    perf_record $FUZZING_BIN "$FUZZING_ARGS"
+    perf_to_bolt $FUZZING_BIN
+    merge $FUZZING_BIN $FUZZING_BIN.BOLT
+    ;;
+*)
+echo "Invalid input..."
+exit 1
+;;
 esac

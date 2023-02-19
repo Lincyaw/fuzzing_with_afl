@@ -3,4 +3,10 @@ testing
 tiff
 xml2
 seeds
+cflow
+jq
+jq-plus
+mujs
+sqlite
+tcpdump
 .idea
