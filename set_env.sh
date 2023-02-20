@@ -1,8 +1,13 @@
 #!/bin/bash
 command=$1
-export SOURCE_CODE_DIR='/home/nn/jq-jq-1.5'
-export MY_AFL_TOOL_PATH='/home/nn/AFL-Modify'
-export BASE_WORK_DIR='/home/nn/work/jq-plus'
+export SOURCE_CODE_DIR='/home/nn/Fuzzing_libxml2/libxml2-2.9.4'
+export MY_AFL_TOOL_PATH='/home/nn/AFL-Ori'
+export BASE_WORK_DIR='/home/nn/work/xmllint'
+export FUZZING_BIN='xmllint'
+export FUZZING_ARGS="--memory --noenc --nocdata --dtdattr --loaddtd --valid --xinclude"
+export MY_AFL_SEEDS_IN=$BASE_WORK_DIR/afl_in_seeds
+# export MY_AFL_SEEDS_IN='/home/nn/work/seeds/general_evaluation/json'
+
 if [ $ROUND ];then
 	echo ""
 else
@@ -22,13 +27,8 @@ else
     esac
 fi
 echo "================Running in "$ROUND" mode====================="
-export FUZZING_BIN='jq'
-export FUZZING_ARGS=". "
-
 export OUTPUT_BINARY_PATH=$BASE_WORK_DIR/bin
 export LLVM_PROFILE_DIR=$BASE_WORK_DIR/prof
-# export MY_AFL_SEEDS_IN=$BASE_WORK_DIR/afl_in_seeds
-export MY_AFL_SEEDS_IN='/home/nn/work/jq/seeds'
 export MY_AFL_OUTPUT_PATH=$BASE_WORK_DIR/afl_out
 export PERF_RECORD_DIR=$BASE_WORK_DIR/perf_data
 export BOLT_FORMAT_DATA_DIR=$BASE_WORK_DIR/bolt_format_prof
@@ -55,15 +55,14 @@ compile(){
 
 fuzz(){
     export LLVM_PROFILE_FILE=$LLVM_PROFILE_DIR/$ROUND.profraw
-    echo "$MY_AFL_TOOL_PATH/afl-fuzz -m none -i $MY_AFL_SEEDS_IN -o $MY_AFL_OUTPUT_PATH.$ROUND -s 123 -D -M master -- $OUTPUT_BINARY_PATH/$1.$ROUND $2"
-    $MY_AFL_TOOL_PATH/afl-fuzz -m none -i $MY_AFL_SEEDS_IN -o $MY_AFL_OUTPUT_PATH.$ROUND -s 123 -D -M master -- $OUTPUT_BINARY_PATH/$1.$ROUND $2
+    # echo "$MY_AFL_TOOL_PATH/afl-fuzz -m none -i $MY_AFL_SEEDS_IN -o $MY_AFL_OUTPUT_PATH.$ROUND -s 123 -D -M master -- $OUTPUT_BINARY_PATH/$1.$ROUND $2 @@"
+    $MY_AFL_TOOL_PATH/afl-fuzz -m none -i $MY_AFL_SEEDS_IN -o $MY_AFL_OUTPUT_PATH.$ROUND -s 123 -D -M master -- $OUTPUT_BINARY_PATH/$1.$ROUND $2 @@
 }
 
 prefuzz(){
     export LLVM_PROFILE_FILE=$LLVM_PROFILE_DIR/$ROUND.profraw
     export AFL_DEBUG=1
-    echo "$MY_AFL_TOOL_PATH/afl-fuzz -m none -i $MY_AFL_SEEDS_IN -o $MY_AFL_OUTPUT_PATH.$ROUND -s 123 -D -M master -- $OUTPUT_BINARY_PATH/$1.$ROUND $2"
-    $MY_AFL_TOOL_PATH/afl-fuzz -m none -i $MY_AFL_SEEDS_IN -o $MY_AFL_OUTPUT_PATH.$ROUND -s 123 -D -M master -- $OUTPUT_BINARY_PATH/$1.$ROUND $2
+    $MY_AFL_TOOL_PATH/afl-fuzz -m none -i $MY_AFL_SEEDS_IN -o $MY_AFL_OUTPUT_PATH.$ROUND -s 123 -x $BASE_WORK_DIR/dictionaries/xml.dict -D -M master -- $OUTPUT_BINARY_PATH/$1.$ROUND $2 @@
 }
 
 pro_deny_list(){
@@ -147,7 +146,7 @@ perf_to_bolt(){
 merge(){
     # merge bolt format
     rm $BASE_WORK_DIR/combined.data
-    find . -name "*.fdata" -print0 | xargs -0 merge-fdata -o $BASE_WORK_DIR/combined.data
+    find $BASE_WORK_DIR/bolt_format_prof -name "*.fdata" -print0 | xargs -0 merge-fdata -o $BASE_WORK_DIR/combined.data
     # merge-fdata $BOLT_FORMAT_DATA_DIR/* > $BASE_WORK_DIR/combined.data
 
     # change the binary
@@ -161,6 +160,9 @@ read -r -p "Please choose ROUND name:
 4. produce denylist
 5. normal fuzz
 6. transform data and optimize with bolt
+7. perf_record
+8. perf2bolt
+9. merge
 " input
 case $input in
 [1])
@@ -226,6 +228,15 @@ case $input in
 [6])
     perf_record $FUZZING_BIN "$FUZZING_ARGS"
     perf_to_bolt $FUZZING_BIN
+    merge $FUZZING_BIN $FUZZING_BIN.BOLT
+    ;;
+[7])
+    perf_record $FUZZING_BIN "$FUZZING_ARGS"
+    ;;
+[8])
+    perf_to_bolt $FUZZING_BIN
+    ;;
+[9])
     merge $FUZZING_BIN $FUZZING_BIN.BOLT
     ;;
 *)
